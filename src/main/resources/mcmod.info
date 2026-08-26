@@ -1,0 +1,16 @@
+[
+{
+  "modid": "journeymapsync",
+  "name": "JourneyMap Sync",
+  "description": "Relays explored JourneyMap chunk tiles between players through the game server (FML channel), sharing day/night/topo/cave map modes. Install on the server and on every participating client. JourneyMap 5.2.x required on clients for map injection.",
+  "version": "${version}",
+  "mcversion": "${mcversion}",
+  "url": "",
+  "updateUrl": "",
+  "authorList": ["Gregorio"],
+  "credits": "",
+  "logoFile": "",
+  "screenshots": [],
+  "dependencies": []
+}
+]

@@ -1,0 +1,116 @@
+name: Build and Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # default for linter - overwritten at runtime by Prepare step
+    env:
+      VERSION: "0.0.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      - name: Cache Minecraft assets
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches/retro_futura_gradle
+            ~/.gradle/caches/minecraft
+          key: ${{ runner.os }}-minecraft-1.7.10
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Verify tag matches build.gradle version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VER="${GITHUB_REF#refs/tags/v}"
+          # Primary source: Gradle (handles any format), fallback: grep on build.gradle
+          GRADLE_VER=$(./gradlew properties --no-daemon -q 2>/dev/null | awk -F': ' '/^version:/{print $2}' | tr -d '[:space:]')
+          if [ -z "$GRADLE_VER" ]; then
+            GRADLE_VER=$(grep -E '^\s*version\s*=\s*"' build.gradle | sed -E 's/.*version\s*=\s*"([^"]+)".*/\1/' | tr -d '[:space:]')
+          fi
+          echo "Tag version: $TAG_VER"
+          echo "build.gradle version: $GRADLE_VER"
+          if [ "$TAG_VER" != "$GRADLE_VER" ]; then
+            echo "::error::tag version $TAG_VER != build.gradle version $GRADLE_VER; bump build.gradle before tagging"
+            exit 1
+          fi
+
+      - name: Build mod
+        run: ./gradlew build --no-daemon --stacktrace
+
+      - name: Prepare JARs for release
+        id: prepare
+        run: |
+          set -e
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            # Same logic: Gradle first, then fallback grep
+            VERSION=$(./gradlew properties --no-daemon -q 2>/dev/null | awk -F': ' '/^version:/{print $2}' | tr -d '[:space:]')
+            if [ -z "$VERSION" ]; then
+              VERSION=$(grep -E '^\s*version\s*=\s*"' build.gradle | sed -E 's/.*version\s*=\s*"([^"]+)".*/\1/' | tr -d '[:space:]')
+            fi
+          fi
+          echo "Version: $VERSION"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          ls -lh build/libs/
+          # Original is JourneyMapSync-<version>.jar — also create fixed-name JourneyMapSync.jar for permanent latest link
+          if [ -f "build/libs/JourneyMapSync-${VERSION}.jar" ]; then
+            cp "build/libs/JourneyMapSync-${VERSION}.jar" "build/libs/JourneyMapSync.jar"
+            echo "Created build/libs/JourneyMapSync.jar"
+          fi
+          ls -lh build/libs/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: JourneyMapSync
+          path: build/libs/JourneyMapSync*.jar
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            build/libs/JourneyMapSync-${{ steps.prepare.outputs.VERSION }}.jar
+            build/libs/JourneyMapSync.jar
+          generate_release_notes: true
+          body: |
+            ## JourneyMap Sync ${{ steps.prepare.outputs.VERSION }}
+
+            Universal mod for Minecraft 1.7.10 (GTNH 2.8.4). Relays explored JourneyMap terrain between players through the game server. Install on the server AND on every participating client (clients also need JourneyMap 5.2.x).
+
+            ### Assets
+            - `JourneyMapSync-${{ steps.prepare.outputs.VERSION }}.jar`: Version-pinned JAR.
+            - `JourneyMapSync.jar`: Unversioned JAR (used by the fixed `/releases/latest/download/` URL).
+
+            ### Quick Download (Latest)
+            ```bash
+            curl -L -o mods/JourneyMapSync.jar https://github.com/${{ github.repository }}/releases/latest/download/JourneyMapSync.jar
+            ```
